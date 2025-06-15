@@ -1,0 +1,8 @@
+{
+    "python.autoComplete.extraPaths": [
+        "/home/youngrok/workspace/ws_asp_final/install/px4_ros_com/local/lib/python3.10/dist-packages",
+        "/home/youngrok/workspace/ws_asp_final/install/px4_msgs/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ]
+}

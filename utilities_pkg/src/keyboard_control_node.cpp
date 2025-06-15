@@ -1,6 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
+#include <px4_msgs/msg/vehicle_command.hpp>
 #include <termios.h>
 #include <unistd.h>
 #include <iostream>
@@ -19,15 +20,19 @@ public:
       "/fmu/out/vehicle_local_position",
       qos,
       std::bind(&KeyboardControl::heading_callback, this, std::placeholders::_1));
+
     timer_ = this->create_wall_timer(
       std::chrono::milliseconds(100), std::bind(&KeyboardControl::timer_callback, this));
     
+    vehicle_cmd_pub_ = this->create_publisher<px4_msgs::msg::VehicleCommand>("/fmu/in/vehicle_command", 10);
+
     std::cout << "Keyboard control started.\n";
   }
 
 private:
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr twist_pub_;
   rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr heading_sub_;
+  rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr vehicle_cmd_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
   
   double heading_rad_ = 0.0;  // current yaw in radians (from NED north)
@@ -78,6 +83,12 @@ private:
       case 'e': vz_ -= STEP; break;
       case 'z': yaw_rate_ -= YAW_SETP; break;
       case 'c': yaw_rate_ += YAW_SETP; break;
+      case '0':  // 숫자패드 0
+        send_gimbal_command(0.0);  // 정면
+        break;
+      case '1':  // 숫자패드 1
+        send_gimbal_command(-90.0);  // 아래로
+        break;
       case 's':
         vx_body_ = vy_body_ = vz_ = yaw_rate_ = 0.0;
         break;
@@ -104,6 +115,49 @@ private:
               << " -> NED x: " << twist.linear.x << " y: " << twist.linear.y
               << " | heading(deg): " << heading_rad_ * 180.0 / M_PI << "       " << std::flush;
   }
+
+  void send_gimbal_command(float pitch_deg)
+  {
+    // 1. Configure gimbal mode (204)
+    px4_msgs::msg::VehicleCommand cfg_cmd;
+    cfg_cmd.timestamp = this->get_clock()->now().nanoseconds() / 1000;
+    cfg_cmd.param1 = 1.0;  // stabilize pitch
+    cfg_cmd.param2 = 0.0;  // stabilize roll
+    cfg_cmd.param3 = 0.0;  // stabilize yaw
+    cfg_cmd.param4 = NAN;
+    cfg_cmd.param5 = NAN;
+    cfg_cmd.param6 = NAN;
+    cfg_cmd.param7 = 2.0;  // MAV_MOUNT_MODE_MAVLINK_TARGETING
+    cfg_cmd.command = px4_msgs::msg::VehicleCommand::VEHICLE_CMD_DO_MOUNT_CONFIGURE;  // 204
+    cfg_cmd.target_system = 1;
+    cfg_cmd.target_component = 1;
+    cfg_cmd.source_system = 1;
+    cfg_cmd.source_component = 1;
+    cfg_cmd.from_external = true;
+    vehicle_cmd_pub_->publish(cfg_cmd);
+
+    rclcpp::sleep_for(std::chrono::milliseconds(50));  // PX4가 처리할 시간 살짝 주기
+
+    // 2. Send pitch control command (205)
+    px4_msgs::msg::VehicleCommand ctrl_cmd;
+    ctrl_cmd.timestamp = this->get_clock()->now().nanoseconds() / 1000;
+    ctrl_cmd.param1 = pitch_deg;   // pitch (deg)
+    ctrl_cmd.param2 = 0.0f;        // roll (deg)
+    ctrl_cmd.param3 = 0.0f;        // yaw (deg)
+    ctrl_cmd.param4 = 0.0f;        // unused
+    ctrl_cmd.param5 = 0.0f;
+    ctrl_cmd.param6 = 0.0f;
+    ctrl_cmd.param7 = NAN;
+    ctrl_cmd.command = px4_msgs::msg::VehicleCommand::VEHICLE_CMD_DO_MOUNT_CONTROL;  // 205
+    ctrl_cmd.target_system = 1;
+    ctrl_cmd.target_component = 1;
+    ctrl_cmd.source_system = 1;
+    ctrl_cmd.source_component = 1;
+    ctrl_cmd.from_external = true;
+    vehicle_cmd_pub_->publish(ctrl_cmd);
+    RCLCPP_INFO(this->get_logger(), "Sent gimbal pitch command: %.1f degrees", pitch_deg);
+  }
+
 };
 
 int main(int argc, char * argv[])
