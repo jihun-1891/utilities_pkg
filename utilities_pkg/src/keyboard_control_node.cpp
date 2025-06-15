@@ -7,6 +7,14 @@
 #include <iostream>
 #include <iomanip>
 
+// For Pose TF
+#include <tf2_ros/transform_listener.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <fstream>
+
+
 class KeyboardControl : public rclcpp::Node
 {
 public:
@@ -27,6 +35,13 @@ public:
     vehicle_cmd_pub_ = this->create_publisher<px4_msgs::msg::VehicleCommand>("/fmu/in/vehicle_command", 10);
 
     std::cout << "Keyboard control started.\n";
+
+    uav_file_.open("uav_wp.csv", std::ios::app);
+    ugv_file_.open("ugv_wp.csv", std::ios::app);
+    if (uav_file_.tellp() == 0) uav_file_ << "x,y,z\n";
+    if (ugv_file_.tellp() == 0) ugv_file_ << "x,y,z\n";
+
+    RCLCPP_INFO(get_logger(), "Keyboard control started.");
   }
 
 private:
@@ -44,6 +59,12 @@ private:
   const double STEP = 0.5;
   const double YAW_SETP = 0.1;
   const double MAX_SPEED = 3.0;
+
+  
+  tf2_ros::Buffer tf_buffer_{get_clock()};
+  tf2_ros::TransformListener tf_listener_{tf_buffer_};
+  std::ofstream uav_file_;
+  std::ofstream ugv_file_;
 
   void heading_callback(const px4_msgs::msg::VehicleLocalPosition::SharedPtr msg)
   {
@@ -92,6 +113,12 @@ private:
       case 's':
         vx_body_ = vy_body_ = vz_ = yaw_rate_ = 0.0;
         break;
+      case 'o':   // UAV waypoint 저장
+        save_waypoint("x500_gimbal_0/base_link", uav_file_);
+        break;
+      case 'p':   // UGV waypoint 저장
+        save_waypoint("X1_asp/base_link", ugv_file_);
+        break;
       default:
         return;
     }
@@ -114,6 +141,30 @@ private:
               << "\rvx_body: " << vx_body_ << " vy_body: " << vy_body_
               << " -> NED x: " << twist.linear.x << " y: " << twist.linear.y
               << " | heading(deg): " << heading_rad_ * 180.0 / M_PI << "       " << std::flush;
+  }
+
+  void save_waypoint(const std::string &child_frame, std::ofstream &file)
+  {
+    try
+    {
+      geometry_msgs::msg::TransformStamped tf =
+          tf_buffer_.lookupTransform("map", child_frame, tf2::TimePointZero);
+
+      double x = tf.transform.translation.x;
+      double y = tf.transform.translation.y;
+      double z = tf.transform.translation.z;
+
+      file << x << "," << y << "," << z << "\n";
+      file.flush();
+
+      RCLCPP_INFO(this->get_logger(),
+                  "Saved WP for %s  (%.2f, %.2f, %.2f)",
+                  child_frame.c_str(), x, y, z);
+    }
+    catch (const tf2::TransformException &ex)
+    {
+      RCLCPP_WARN(this->get_logger(), "TF lookup failed: %s", ex.what());
+    }
   }
 
   void send_gimbal_command(float pitch_deg)

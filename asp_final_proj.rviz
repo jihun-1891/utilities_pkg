@@ -8,7 +8,7 @@ Panels:
         - /UGV_Image1
         - /UAV_Image1
       Splitter Ratio: 0.8478260636329651
-    Tree Height: 200
+    Tree Height: 373
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -131,8 +131,8 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: -116.78195190429688
-        Min Value: -124.68206024169922
+        Max Value: -117.6240234375
+        Min Value: -127.53807067871094
         Value: true
       Axis: X
       Channel Name: intensity
@@ -236,7 +236,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 3.732637405395508
+      Distance: 4.463766574859619
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -276,5 +276,5 @@ Window Geometry:
   Views:
     collapsed: true
   Width: 811
-  X: 1108
-  Y: 137
+  X: 534
+  Y: 87
