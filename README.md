@@ -13,6 +13,8 @@ ROS 2 keyboard tele-op node for a **PX4 SITL + Gazebo** setup:
 ---
 
 ## Features
+> Gimbal control is not available now. It will fix soon.
+> Utill that please use QGC function.
 
 | Key | Action | Topic / Command | Notes |
 |-----|--------|-----------------|-------|
