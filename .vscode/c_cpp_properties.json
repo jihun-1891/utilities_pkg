@@ -11,7 +11,7 @@
         "/opt/ros/humble/include/**",
         "/home/youngrok/workspace/ws_asp_final/src/gazebo_env_setup/include/**",
         "/home/youngrok/workspace/ws_asp_final/src/px4_ros_com/include/**",
-        "/home/youngrok/workspace/ws_asp_final/src/ugv_controller/include/**",
+        "/home/youngrok/workspace/ws_asp_final/src/vehicle_controller/include/**",
         "/home/youngrok/workspace/ws_asp_final/src/utilities_pkg/include/**",
         "/usr/include/**"
       ],

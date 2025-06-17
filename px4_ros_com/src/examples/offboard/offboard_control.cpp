@@ -29,7 +29,7 @@ public:
     pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>("/command/pose", 10, std::bind(&OffboardControl::pose_callback, this, _1));
     twist_sub_ = create_subscription<geometry_msgs::msg::Twist>("/command/twist", 10, std::bind(&OffboardControl::twist_callback, this, _1));
 
-    timer_ = create_wall_timer(std::chrono::milliseconds(100), std::bind(&OffboardControl::timer_callback, this));
+    timer_ = create_wall_timer(std::chrono::milliseconds(50), std::bind(&OffboardControl::timer_callback, this));
   }
 
 private:
@@ -44,41 +44,54 @@ private:
   TrajectorySetpoint setpoint_{};
   int setpoint_counter_ = 0;
 
-  void timer_callback() 
+  bool   target_command  = false;   // setpoint가 최소 한 번은 들어왔는가?
+  bool   armed_          = false;   // 이미 arm 했는가?
+
+  void timer_callback()
   {
     publish_offboard_control_mode();
     trajectory_setpoint_pub_->publish(setpoint_);
 
-    if (setpoint_counter_ < 10) {
-      setpoint_counter_++;
-      return;
-    }else if (setpoint_counter_ > 12)
+    /* 아직 setpoint를 받은 적이 없다면 단순 송출만 */
+    if (!target_command)
     {
+      RCLCPP_INFO(get_logger(), "Waiting for target command.");
       return;
     }
-    
 
-    if (setpoint_counter_ == 10) {
-      publish_vehicle_command(VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 6);  // PX4_CUSTOM_MAIN_MODE_OFFBOARD
-      publish_vehicle_command(VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM, 1.0);  // Arm
-      // publish_vehicle_command(VehicleCommand::VEHICLE_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, -3.0); // optional: 이륙 (z는 NED 기준)
-      RCLCPP_INFO(this->get_logger(), "Sent offboard + arm");
+    /* pose를 받은 뒤 10회(≈1 s) 동안 연속 송출해야 PX4가 Offboard를 허용 */
+    if (!armed_) {
+      if (++setpoint_counter_ >= 10) {
+        /* ① OFFBOARD 모드 설정  ② ARM */
+        publish_vehicle_command(VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 6);
+        publish_vehicle_command(VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM, 1.0);
+        armed_ = true;
+        RCLCPP_INFO(get_logger(), "Set OFFBOARD mode & ARM (after pose received)");
+      }
     }
+    // stop the counter after reaching 11
+    if (setpoint_counter_ < 11) {
+      setpoint_counter_++;
+    }
+  } 
 
-    setpoint_counter_++;
-  }
-
-  void pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+  /* Pose 콜백: setpoint 저장 + 플래그 ON + 카운터 초기화 */
+  void pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+  {
     mode_ = ControlMode::POSITION;
     setpoint_.position[0] = msg->pose.position.x;
     setpoint_.position[1] = msg->pose.position.y;
     setpoint_.position[2] = msg->pose.position.z;
+    setpoint_.yaw         = tf2::getYaw(msg->pose.orientation);
+    RCLCPP_INFO(get_logger(), "Target pose arrived. X: %f, Y: %f, Z: %f, Yaw: %f", 
+                                setpoint_.position[0],setpoint_.position[1],setpoint_.position[2],setpoint_.yaw);
 
-    double yaw = tf2::getYaw(msg->pose.orientation);
-    setpoint_.yaw = yaw;
+    target_command   = true;
   }
 
-  void twist_callback(const geometry_msgs::msg::Twist::SharedPtr msg) {
+  /* Twist 콜백도 동일하게 플래그·카운터 처리 */
+  void twist_callback(const geometry_msgs::msg::Twist::SharedPtr msg)
+  {
     mode_ = ControlMode::VELOCITY;
     setpoint_.position[0] = NAN;
     setpoint_.position[1] = NAN;
@@ -86,16 +99,23 @@ private:
     setpoint_.velocity[0] = msg->linear.x;
     setpoint_.velocity[1] = msg->linear.y;
     setpoint_.velocity[2] = msg->linear.z;
-    setpoint_.yaw = NAN;
-    setpoint_.yawspeed = msg->angular.z;
+    setpoint_.yaw         = NAN;
+    setpoint_.yawspeed    = msg->angular.z;
+
+    target_command   = true;
+    setpoint_counter_ = 0;
   }
 
   void publish_offboard_control_mode() {
     OffboardControlMode msg{};
-    msg.timestamp = get_clock()->now().nanoseconds() / 1000;
+    msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
     msg.position = (mode_ == ControlMode::POSITION);
     msg.velocity = (mode_ == ControlMode::VELOCITY);
     offboard_control_mode_pub_->publish(msg);
+    msg.acceleration = false;
+    msg.attitude = false;
+    msg.body_rate = false;
+  	offboard_control_mode_pub_->publish(msg);
   }
 
   void publish_vehicle_command(uint16_t command, float param1 = 0.0, float param2 = 0.0)
