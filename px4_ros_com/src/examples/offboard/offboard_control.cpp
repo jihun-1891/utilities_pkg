@@ -9,6 +9,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2/LinearMath/Quaternion.h>
+#include <std_msgs/msg/float32.hpp>
 #include <tf2/utils.h> 
 #include <rclcpp/rclcpp.hpp>
 #include <string>
@@ -25,10 +26,11 @@ public:
     offboard_control_mode_pub_ = create_publisher<OffboardControlMode>("/fmu/in/offboard_control_mode", 10);
     trajectory_setpoint_pub_ = create_publisher<TrajectorySetpoint>("/fmu/in/trajectory_setpoint", 10);
     vehicle_command_pub_ = create_publisher<VehicleCommand>("/fmu/in/vehicle_command", 10);
+    
 
     pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>("/command/pose", 10, std::bind(&OffboardControl::pose_callback, this, _1));
     twist_sub_ = create_subscription<geometry_msgs::msg::Twist>("/command/twist", 10, std::bind(&OffboardControl::twist_callback, this, _1));
-
+    gimbal_pitch_sub_ = create_subscription<std_msgs::msg::Float32>("/gimbal_pitch_degree", 10, std::bind(&OffboardControl::gimbal_callback, this, std::placeholders::_1));    
     timer_ = create_wall_timer(std::chrono::milliseconds(50), std::bind(&OffboardControl::timer_callback, this));
   }
 
@@ -38,11 +40,18 @@ private:
   rclcpp::Publisher<VehicleCommand>::SharedPtr vehicle_command_pub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr twist_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr gimbal_pitch_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   ControlMode mode_ = ControlMode::POSITION;
   TrajectorySetpoint setpoint_{};
   int setpoint_counter_ = 0;
+
+  const uint8_t MY_SYSID  = 46;   // 비행 컨트롤러와 동일
+  const uint8_t MY_COMPID = 47;  // USER1
+  const uint8_t TARGET_SYSID  = 1;   
+  const uint8_t TARGET_COMPID = 1;  
+  const uint8_t FLAG_GIMBAL = 12;
 
   bool   target_command  = false;   // setpoint가 최소 한 번은 들어왔는가?
   bool   armed_          = false;   // 이미 arm 했는가?
@@ -83,6 +92,10 @@ private:
                                 setpoint_.position[0],setpoint_.position[1],setpoint_.position[2],setpoint_.yaw);
 
     target_command   = true;
+  }
+  void gimbal_callback(const std_msgs::msg::Float32::SharedPtr msg)
+  {
+    send_gimbal_pitch(static_cast<float>(msg->data));
   }
 
   /* Twist 콜백도 동일하게 플래그·카운터 처리 */
@@ -126,6 +139,53 @@ private:
     msg.source_component = 1;
     msg.from_external = true;
     vehicle_command_pub_->publish(msg);
+  }
+
+  void send_gimbal_pitch(float pitch_deg)
+  {
+
+    take_gimbal_control();
+    /* 2) 피치 명령 */
+    auto now_us = this->get_clock()->now().nanoseconds() / 1000;
+
+    VehicleCommand cmd{};
+    cmd.timestamp          = now_us;
+    cmd.command            = VehicleCommand::VEHICLE_CMD_DO_GIMBAL_MANAGER_PITCHYAW; // 1000
+    cmd.param1             = pitch_deg;   // Pitch (+위, -아래)
+    cmd.param2             = 0.0f;         // Yaw 유지
+    cmd.param3             = NAN;          // rate
+    cmd.param4             = NAN;        // rate
+    cmd.param5             = FLAG_GIMBAL;           // follow(0) or lock(16)
+    cmd.param7             = 1;           // gimbal_device_id
+    cmd.target_system      = TARGET_SYSID;
+    cmd.target_component   = TARGET_COMPID;
+    cmd.source_system      = MY_SYSID;
+    cmd.source_component   = MY_COMPID;   // ★ 반드시 동일
+    cmd.from_external      = true;
+    vehicle_command_pub_->publish(cmd);
+  }
+
+  void take_gimbal_control()
+  {
+    VehicleCommand cmd{};
+    cmd.timestamp        = this->get_clock()->now().nanoseconds() / 1000;
+    cmd.command          = VehicleCommand::VEHICLE_CMD_DO_GIMBAL_MANAGER_CONFIGURE;   // 1001
+
+    /* ── 핵심: -2 를 넣으면 PX4가 msg 의 sys/comp id 그대로 채움 ── */
+    cmd.param1 = MY_SYSID;          
+    cmd.param2 = MY_COMPID;          
+    cmd.param3 = cmd.param4 = 0;     // secondary 없음
+    cmd.param5 = FLAG_GIMBAL;                   // flags
+    cmd.param7 = 1;                   // gimbal device id
+
+    cmd.target_system      = TARGET_SYSID;       // PX4
+    cmd.target_component   = TARGET_COMPID;       // MAV_COMP_ID_AUTOPILOT
+    cmd.source_system      = MY_SYSID;
+    cmd.source_component   = MY_COMPID;
+    cmd.from_external      = true;
+
+    vehicle_command_pub_->publish(cmd);
+    RCLCPP_INFO(get_logger(), ">>> Sent CONFIGURE(1001) – take primary control");
   }
 };
 

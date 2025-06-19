@@ -105,7 +105,10 @@ private:
 	void request_vehicle_command(uint16_t command, float param1 = 0.0, float param2 = 0.0);
 	void response_callback(rclcpp::Client<px4_msgs::srv::VehicleCommand>::SharedFuture future);
 	void timer_callback(void);
+
 };
+
+
 
 /**
  * @brief Send a command to switch to offboard mode
