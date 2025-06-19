@@ -31,9 +31,8 @@ source install/setup.bash
 > Without QGC (or an equivalent 1 Hz MAVLink heartbeat) PX4 v1.14+ will refuse to ARM or enter OFFBOARD mode.
 ---
 ## Features
-
-> For gimbal control, send `/gimbal_pitch_degree` Topic to `offboard_control` node.
-> The data is `std_msgs::msg::Float32`.
+For gimbal control, send `/gimbal_pitch_degree` Topic to `offboard_control` node.
+The data is `std_msgs::msg::Float32`.
 ---
 
 ## Features
