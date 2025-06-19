@@ -69,10 +69,6 @@ private:
         RCLCPP_INFO(get_logger(), "Set OFFBOARD mode & ARM (after pose received)");
       }
     }
-    // stop the counter after reaching 11
-    if (setpoint_counter_ < 11) {
-      setpoint_counter_++;
-    }
   } 
 
   /* Pose 콜백: setpoint 저장 + 플래그 ON + 카운터 초기화 */
@@ -111,7 +107,6 @@ private:
     msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
     msg.position = (mode_ == ControlMode::POSITION);
     msg.velocity = (mode_ == ControlMode::VELOCITY);
-    offboard_control_mode_pub_->publish(msg);
     msg.acceleration = false;
     msg.attitude = false;
     msg.body_rate = false;
