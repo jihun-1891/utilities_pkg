@@ -29,7 +29,11 @@ source install/setup.bash
    ```
 
 > Without QGC (or an equivalent 1 Hz MAVLink heartbeat) PX4 v1.14+ will refuse to ARM or enter OFFBOARD mode.
+---
+## Features
 
+> For gimbal control, send `/gimbal_pitch_degree` Topic to `offboard_control` node.
+> The data is `std_msgs::msg::Float32`.
 ---
 
 ## Features
@@ -42,11 +46,9 @@ source install/setup.bash
 | **z / c** | Yaw CCW / CW                    | 〃                                  | ± 0.1 rad/s per tap                 |
 | **s**     | Hard stop (zero twist)          | 〃                                  |                                     |
 | **0**     | Gimbal pitch 0° (level)         | `VEHICLE_CMD_DO_MOUNT_CONTROL`     | sends `204` + `205`                 |
-| **1**     | Gimbal pitch ‑90° (down)        | 〃                                  |                                     |
+| **9**     | Gimbal pitch ‑90° (down)        | 〃                                  |                                     |
 | **o**     | Log **UAV** pose → `uav_wp.csv` | TF `map → x500_gimbal_0/base_link` | appends `x,y,z`                     |
 | **p**     | Log **UGV** pose → `ugv_wp.csv` | TF `map → x1_asp/base_link`        | 〃                                   |
-
-*⚠️ Gimbal control is temporarily disabled — please use QGC until it is restored.*
 
 ---
 
