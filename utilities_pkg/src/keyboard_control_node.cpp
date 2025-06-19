@@ -14,6 +14,7 @@
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <fstream>
 
+using VC = px4_msgs::msg::VehicleCommand;
 
 class KeyboardControl : public rclcpp::Node
 {
@@ -42,6 +43,15 @@ public:
     if (ugv_file_.tellp() == 0) ugv_file_ << "x,y,z\n";
 
     RCLCPP_INFO(get_logger(), "Keyboard control started.");
+    
+    // gimbal_cfg_timer_ = this->create_wall_timer(
+    //   std::chrono::milliseconds(1000),   /* 1 초 후 한 번만 실행 */
+    //   [this](){
+    //     if (!control_taken_)  take_gimbal_control();
+    //     gimbal_cfg_timer_->cancel();   // 더 돌 필요 없음
+    //   });
+    take_gimbal_control();
+    RCLCPP_INFO(get_logger(), "Request gimbal order of priority.");
   }
 
 private:
@@ -60,6 +70,14 @@ private:
   const double YAW_SETP = 0.1;
   const double MAX_SPEED = 3.0;
 
+  const uint8_t MY_SYSID  = 46;   // 비행 컨트롤러와 동일
+  const uint8_t MY_COMPID = 47;  // USER1
+  const uint8_t TARGET_SYSID  = 1;   
+  const uint8_t TARGET_COMPID = 1;  
+
+
+  bool control_taken_ = false;                      // 제어권 확보 여부
+  rclcpp::TimerBase::SharedPtr gimbal_cfg_timer_;   // 1-회 타이머
   
   tf2_ros::Buffer tf_buffer_{get_clock()};
   tf2_ros::TransformListener tf_listener_{tf_buffer_};
@@ -105,10 +123,10 @@ private:
       case 'z': yaw_rate_ -= YAW_SETP; break;
       case 'c': yaw_rate_ += YAW_SETP; break;
       case '0':  // 숫자패드 0
-        send_gimbal_command(0.0);  // 정면
+        send_gimbal_pitch(0.0);  // 정면
         break;
       case '1':  // 숫자패드 1
-        send_gimbal_command(-90.0);  // 아래로
+        send_gimbal_pitch(-90.0);  // 아래로
         break;
       case 's':
         vx_body_ = vy_body_ = vz_ = yaw_rate_ = 0.0;
@@ -167,46 +185,49 @@ private:
     }
   }
 
-  void send_gimbal_command(float pitch_deg)
+  void send_gimbal_pitch(float pitch_deg)
   {
-    // 1. Configure gimbal mode (204)
-    px4_msgs::msg::VehicleCommand cfg_cmd;
-    cfg_cmd.timestamp = this->get_clock()->now().nanoseconds() / 1000;
-    cfg_cmd.param1 = 1.0;  // stabilize pitch
-    cfg_cmd.param2 = 0.0;  // stabilize roll
-    cfg_cmd.param3 = 0.0;  // stabilize yaw
-    cfg_cmd.param4 = NAN;
-    cfg_cmd.param5 = NAN;
-    cfg_cmd.param6 = NAN;
-    cfg_cmd.param7 = 2.0;  // MAV_MOUNT_MODE_MAVLINK_TARGETING
-    cfg_cmd.command = px4_msgs::msg::VehicleCommand::VEHICLE_CMD_DO_MOUNT_CONFIGURE;  // 204
-    cfg_cmd.target_system = 1;
-    cfg_cmd.target_component = 1;
-    cfg_cmd.source_system = 1;
-    cfg_cmd.source_component = 1;
-    cfg_cmd.from_external = true;
-    vehicle_cmd_pub_->publish(cfg_cmd);
+    take_gimbal_control();
+    /* 2) 피치 명령 */
+    auto now_us = this->get_clock()->now().nanoseconds() / 1000;
 
-    rclcpp::sleep_for(std::chrono::milliseconds(50));  // PX4가 처리할 시간 살짝 주기
+    VC cmd{};
+    cmd.timestamp          = now_us + 1000;
+    cmd.command            = VC::VEHICLE_CMD_DO_GIMBAL_MANAGER_PITCHYAW; // 1000
+    cmd.param1             = pitch_deg;   // Pitch (+위, -아래)
+    cmd.param2             = NAN;         // Yaw 유지
+    cmd.param5             = 0;           // follow(0) or lock(16)
+    cmd.param7             = 0;           // gimbal_device_id
+    cmd.target_system      = TARGET_SYSID;
+    cmd.target_component   = TARGET_COMPID;
+    cmd.source_system      = MY_SYSID;
+    cmd.source_component   = MY_COMPID;   // ★ 반드시 동일
+    cmd.from_external      = true;
+    vehicle_cmd_pub_->publish(cmd);
+  }
 
-    // 2. Send pitch control command (205)
-    px4_msgs::msg::VehicleCommand ctrl_cmd;
-    ctrl_cmd.timestamp = this->get_clock()->now().nanoseconds() / 1000;
-    ctrl_cmd.param1 = pitch_deg;   // pitch (deg)
-    ctrl_cmd.param2 = 0.0f;        // roll (deg)
-    ctrl_cmd.param3 = 0.0f;        // yaw (deg)
-    ctrl_cmd.param4 = 0.0f;        // unused
-    ctrl_cmd.param5 = 0.0f;
-    ctrl_cmd.param6 = 0.0f;
-    ctrl_cmd.param7 = NAN;
-    ctrl_cmd.command = px4_msgs::msg::VehicleCommand::VEHICLE_CMD_DO_MOUNT_CONTROL;  // 205
-    ctrl_cmd.target_system = 1;
-    ctrl_cmd.target_component = 1;
-    ctrl_cmd.source_system = 1;
-    ctrl_cmd.source_component = 1;
-    ctrl_cmd.from_external = true;
-    vehicle_cmd_pub_->publish(ctrl_cmd);
-    RCLCPP_INFO(this->get_logger(), "Sent gimbal pitch command: %.1f degrees", pitch_deg);
+  void take_gimbal_control()
+  {
+      VC cfg{};
+      cfg.timestamp        = this->get_clock()->now().nanoseconds() / 1000;
+      cfg.command          = VC::VEHICLE_CMD_DO_GIMBAL_MANAGER_CONFIGURE;   // 1001
+
+      /* ── 핵심: -2 를 넣으면 PX4가 msg 의 sys/comp id 그대로 채움 ── */
+      cfg.param1 = MY_SYSID;          // primary sysid  = msg->sysid  (1)
+      cfg.param2 = MY_COMPID;          // primary compid = msg->compid (51)
+      cfg.param3 = cfg.param4 = 0;     // secondary 없음
+      cfg.param5 = 0;                   // flags
+      cfg.param7 = 0;                   // gimbal device id
+
+      cfg.target_system      = TARGET_SYSID;       // PX4
+      cfg.target_component   = TARGET_COMPID;       // MAV_COMP_ID_AUTOPILOT
+      cfg.source_system      = MY_SYSID;
+      cfg.source_component   = MY_COMPID;
+      cfg.from_external      = true;
+
+      vehicle_cmd_pub_->publish(cfg);
+      RCLCPP_INFO(get_logger(), ">>> Sent CONFIGURE(1001) – take primary control");
+      control_taken_ = true;
   }
 
 };
