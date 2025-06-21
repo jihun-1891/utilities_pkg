@@ -3,6 +3,7 @@
 #include <px4_msgs/msg/vehicle_local_position.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
 #include <std_msgs/msg/float32.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <termios.h>
 #include <unistd.h>
 #include <iostream>
@@ -11,7 +12,7 @@
 // For Pose TF
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <fstream>
 
@@ -25,6 +26,8 @@ public:
     rclcpp::QoS qos(rclcpp::QoSInitialization::from_rmw(rmw_qos_profile_sensor_data));
     qos.reliability(RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT);
     gimbal_pitch_pub_ = this->create_publisher<std_msgs::msg::Float32>("/gimbal_pitch_degree",10);
+    land_pub_ = this->create_publisher<std_msgs::msg::Bool>("/command/land", 10);
+    disarm_pub_ = this->create_publisher<std_msgs::msg::Bool>("/command/disarm", 10);
 
     heading_sub_ = this->create_subscription<px4_msgs::msg::VehicleLocalPosition>(
       "/fmu/out/vehicle_local_position",
@@ -52,6 +55,8 @@ private:
   rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr heading_sub_;
   rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr vehicle_cmd_pub_;
   rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr gimbal_pitch_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr land_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr disarm_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
   
   double heading_rad_ = 0.0;  // current yaw in radians (from NED north)
@@ -60,6 +65,7 @@ private:
   double vz_ = 0.0;
   double yaw_rate_ = 0.0;
   double gimbal_pitch_degree_ = 0.0;
+  double switch_to_arm_ = false;
   
   const double STEP = 0.5;
   const double YAW_SETP = 0.1;
@@ -101,51 +107,77 @@ private:
 
     switch (c)
     {
-      case 'w': vx_body_ += STEP; break;
-      case 'x': vx_body_ -= STEP; break;
-      case 'a': vy_body_ -= STEP; break;
-      case 'd': vy_body_ += STEP; break;
-      case 'q': vz_ += STEP; break;
-      case 'e': vz_ -= STEP; break;
-      case 'z': yaw_rate_ -= YAW_SETP; break;
-      case 'c': yaw_rate_ += YAW_SETP; break;
+      case 'w': vx_body_ += STEP; switch_to_arm_=true; break;
+      case 'x': vx_body_ -= STEP; switch_to_arm_=true; break;
+      case 'a': vy_body_ -= STEP; switch_to_arm_=true; break;
+      case 'd': vy_body_ += STEP; switch_to_arm_=true; break;
+      case 'q': vz_ += STEP; switch_to_arm_=true; break;
+      case 'e': vz_ -= STEP; switch_to_arm_=true; break;
+      case 'z': yaw_rate_ -= YAW_SETP; switch_to_arm_=true; break;
+      case 'c': yaw_rate_ += YAW_SETP; switch_to_arm_=true; break;
       case '0':  // 숫자패드 0
         send_gimbal_target_pitch_dgree(0.0);  // 정면
+        switch_to_arm_=true;
         break;
       case '9':  // 숫자패드 1
         send_gimbal_target_pitch_dgree(-90.0);  // 아래로
+        switch_to_arm_=true;
         break;
       case 's':
         vx_body_ = vy_body_ = vz_ = yaw_rate_ = 0.0;
+        switch_to_arm_=true;
         break;
       case 'o':   // UAV waypoint 저장
         save_waypoint("x500_gimbal_0/base_link", uav_file_);
+        switch_to_arm_=true;
         break;
       case 'p':   // UGV waypoint 저장
         save_waypoint("X1_asp/base_link", ugv_file_);
+        switch_to_arm_=true;
         break;
+      case 'l':
+      {
+        std_msgs::msg::Bool land;
+        land.data = true;
+        land_pub_->publish(land);
+        switch_to_arm_ = false;
+        RCLCPP_INFO(this->get_logger(), "Land message has to send to offboard control node.");
+        break;
+      }
+      case 'k':
+      {
+        std_msgs::msg::Bool disarm;
+        disarm.data = true;
+        switch_to_arm_ = false;
+        disarm_pub_->publish(disarm);
+        RCLCPP_INFO(this->get_logger(), "Disarm message has to send to offboard control node.");
+        break;
+      }
       default:
         return;
     }
 
-    limit(vx_body_);
-    limit(vy_body_);
-    limit(vz_);
-    limit(yaw_rate_);
+    if (switch_to_arm_)
+    {
+      limit(vx_body_);
+      limit(vy_body_);
+      limit(vz_);
+      limit(yaw_rate_);
 
-    // Body → NED 변환
-    geometry_msgs::msg::Twist twist;
-    twist.linear.x = vx_body_ * cos(heading_rad_) - vy_body_ * sin(heading_rad_);
-    twist.linear.y = vx_body_ * sin(heading_rad_) + vy_body_ * cos(heading_rad_);
-    twist.linear.z = vz_;
-    twist.angular.z = yaw_rate_;
+      // Body → NED 변환
+      geometry_msgs::msg::Twist twist;
+      twist.linear.x = vx_body_ * cos(heading_rad_) - vy_body_ * sin(heading_rad_);
+      twist.linear.y = vx_body_ * sin(heading_rad_) + vy_body_ * cos(heading_rad_);
+      twist.linear.z = vz_;
+      twist.angular.z = yaw_rate_;
 
-    twist_pub_->publish(twist);
+      twist_pub_->publish(twist);
 
-    std::cout << std::fixed << std::setprecision(2)
-              << "\rvx_body: " << vx_body_ << " vy_body: " << vy_body_
-              << " -> NED x: " << twist.linear.x << " y: " << twist.linear.y
-              << " | heading(deg): " << heading_rad_ * 180.0 / M_PI << "       " << std::flush;
+      std::cout << std::fixed << std::setprecision(2)
+                << "\rvx_body: " << vx_body_ << " vy_body: " << vy_body_
+                << " -> NED x: " << twist.linear.x << " y: " << twist.linear.y
+                << " | heading(deg): " << heading_rad_ * 180.0 / M_PI << "       " << std::flush;
+    }
   }
 
   void save_waypoint(const std::string &child_frame, std::ofstream &file)

@@ -5,11 +5,13 @@
 #include <px4_msgs/msg/trajectory_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
 #include <px4_msgs/msg/vehicle_control_mode.hpp>
+#include <px4_msgs/msg/vehicle_land_detected.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2/LinearMath/Quaternion.h>
 #include <std_msgs/msg/float32.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <tf2/utils.h> 
 #include <rclcpp/rclcpp.hpp>
 #include <string>
@@ -30,7 +32,10 @@ public:
 
     pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>("/command/pose", 10, std::bind(&OffboardControl::pose_callback, this, _1));
     twist_sub_ = create_subscription<geometry_msgs::msg::Twist>("/command/twist", 10, std::bind(&OffboardControl::twist_callback, this, _1));
-    gimbal_pitch_sub_ = create_subscription<std_msgs::msg::Float32>("/gimbal_pitch_degree", 10, std::bind(&OffboardControl::gimbal_callback, this, std::placeholders::_1));    
+    gimbal_pitch_sub_ = create_subscription<std_msgs::msg::Float32>("/gimbal_pitch_degree", 10, std::bind(&OffboardControl::gimbal_callback, this, _1));    
+    land_sub_ = create_subscription<std_msgs::msg::Bool>("/command/land", 10, std::bind(&OffboardControl::land_callback, this, _1));
+    land_detected_sub_ = create_subscription<px4_msgs::msg::VehicleLandDetected>("/fmu/out/vehicle_land_detected", 10, std::bind(&OffboardControl::land_detected_callback, this, _1));
+    disarm_sub_ = create_subscription<std_msgs::msg::Bool>("/command/disarm", 10, std::bind(&OffboardControl::disarm_callback, this, std::placeholders::_1));
     timer_ = create_wall_timer(std::chrono::milliseconds(50), std::bind(&OffboardControl::timer_callback, this));
   }
 
@@ -41,6 +46,9 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr twist_sub_;
   rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr gimbal_pitch_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr land_sub_;
+  rclcpp::Subscription<px4_msgs::msg::VehicleLandDetected>::SharedPtr land_detected_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr disarm_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   ControlMode mode_ = ControlMode::POSITION;
@@ -53,8 +61,10 @@ private:
   const uint8_t TARGET_COMPID = 1;  
   const uint8_t FLAG_GIMBAL = 12;
 
-  bool   target_command  = false;   // setpoint가 최소 한 번은 들어왔는가?
+  bool   target_command_ = false;   // setpoint가 최소 한 번은 들어왔는가?
   bool   armed_          = false;   // 이미 arm 했는가?
+  bool   landed_         = false;
+  bool   landmode_       = false;
 
   void timer_callback()
   {
@@ -62,14 +72,14 @@ private:
     trajectory_setpoint_pub_->publish(setpoint_);
 
     /* 아직 setpoint를 받은 적이 없다면 단순 송출만 */
-    if (!target_command)
+    if (!target_command_)
     {
       RCLCPP_INFO(get_logger(), "Waiting for target command.");
       return;
     }
 
     /* pose를 받은 뒤 10회(≈1 s) 동안 연속 송출해야 PX4가 Offboard를 허용 */
-    if (!armed_) {
+    if (!armed_ || landed_ || !landmode_) {
       if (++setpoint_counter_ >= 10) {
         /* ① OFFBOARD 모드 설정  ② ARM */
         publish_vehicle_command(VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 6);
@@ -91,7 +101,7 @@ private:
     RCLCPP_INFO(get_logger(), "Target pose arrived. X: %f, Y: %f, Z: %f, Yaw: %f", 
                                 setpoint_.position[0],setpoint_.position[1],setpoint_.position[2],setpoint_.yaw);
 
-    target_command   = true;
+    target_command_   = true;
   }
   void gimbal_callback(const std_msgs::msg::Float32::SharedPtr msg)
   {
@@ -111,7 +121,7 @@ private:
     setpoint_.yaw         = NAN;
     setpoint_.yawspeed    = msg->angular.z;
 
-    target_command   = true;
+    target_command_   = true;
     setpoint_counter_ = 0;
   }
 
@@ -186,6 +196,43 @@ private:
 
     vehicle_command_pub_->publish(cmd);
     RCLCPP_INFO(get_logger(), ">>> Sent CONFIGURE(1001) – take primary control");
+  }
+
+  void land_callback(const std_msgs::msg::Bool::SharedPtr /*unused*/)
+  {
+    RCLCPP_INFO(get_logger(), "Land request received → sending NAV_LAND");
+
+    /* ① 필요하다면 OFFBOARD 해제 후 AUTO.LAND 로 전환
+       (PX4는 NAV_LAND만으로도 착륙을 시작하지만,
+        확실히 하려면 SET_MODE로 AUTO.LAND(4) 전환 → 아래 한 줄 주석 해제)
+    */
+    landmode_ = true;
+    publish_vehicle_command(VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 4);
+
+    /* ② NAV_LAND 지령 전송 (MAV_CMD_NAV_LAND = 21) */
+    publish_vehicle_command(VehicleCommand::VEHICLE_CMD_NAV_LAND);
+
+    /* 선택) 착륙 완료 후 자동 해제(Disarm)는 PX4가 알아서 수행하므로 생략 */
+  }
+  
+  void land_detected_callback(const px4_msgs::msg::VehicleLandDetected::SharedPtr msg)
+  {
+    if (msg->landed)
+    {
+      landed_ = true;
+      landmode_ = false;
+    }
+  }
+
+  void disarm_callback(const std_msgs::msg::Bool::SharedPtr msg)
+  {
+    if (msg->data) {                       // true 면 Disarm
+      RCLCPP_INFO(get_logger(), "DISARM requested → sending command 400");
+      publish_vehicle_command(VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM,0.0f, 21196.0f);       // param2에 21196.0f는 시뮬레이션 대회를 위한 강제 disarm 입니다. 하늘에서 명령하면 프롭 멈춰서 떨어지니 실제로는 사용하지 마세요 -조교-
+      armed_ = false;
+      target_command_ = false;
+
+    }
   }
 };
 
