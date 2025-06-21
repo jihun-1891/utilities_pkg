@@ -44,15 +44,15 @@ The data is `std_msgs::msg::Float32`.
 | Key       | Action                          | Topic / Command                    | Notes                               |
 | --------- | ------------------------------- | ---------------------------------- | ----------------------------------- |
 | **w / x** | Forward / Backward (Body X)     | `/command/twist`                   | ± 0.5 m/s per tap (clamped ± 3 m/s) |
-| **a / d** | Left / Right (Body Y)           | 〃                                  | 〃                                   |
-| **q / e** | Up / Down (Body Z)              | 〃                                  | 〃                                   |
-| **z / c** | Yaw CCW / CW                    | 〃                                  | ± 0.1 rad/s per tap                 |
-| **s**     | Hard stop (zero twist)          | 〃                                  |                                     |
+| **a / d** | Left / Right (Body Y)           | 〃                                 | 〃                                  |
+| **q / e** | Up / Down (Body Z)              | 〃                                 | 〃                                  |
+| **z / c** | Yaw CCW / CW                    | 〃                                 | ± 0.1 rad/s per tap                 |
+| **s**     | Hard stop (zero twist)          | 〃                                 |                                     |
 | **0**     | Gimbal pitch 0° (level)         | `VEHICLE_CMD_DO_MOUNT_CONTROL`     | sends `204` + `205`                 |
-| **9**     | Gimbal pitch ‑90° (down)        | 〃                                  |                                     |
+| **9**     | Gimbal pitch ‑90° (down)        | 〃                                 |                                     |
 | **o**     | Log **UAV** pose → `uav_wp.csv` | TF `map → x500_gimbal_0/base_link` | appends `x,y,z`                     |
-| **p**     | Log **UGV** pose → `ugv_wp.csv` | TF `map → x1_asp/base_link`        | 〃                                   |
-| **k**     | Kill motors                     | `/command/disarm`                  | 〃                                  |
+| **p**     | Log **UGV** pose → `ugv_wp.csv` | TF `map → x1_asp/base_link`        | 〃                                  |
+| **k**     | Kill motors                     | `/command/disarm`                  |                                     |
 
 ---
 
