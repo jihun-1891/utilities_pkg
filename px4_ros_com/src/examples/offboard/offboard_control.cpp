@@ -72,11 +72,11 @@ private:
     trajectory_setpoint_pub_->publish(setpoint_);
 
     /* 아직 setpoint를 받은 적이 없다면 단순 송출만 */
-    if (!target_command_)
-    {
-      RCLCPP_INFO(get_logger(), "Waiting for target command.");
-      return;
-    }
+    // if (!target_command_)
+    // {
+    //   RCLCPP_INFO(get_logger(), "Waiting for target command.");
+    //   return;
+    // }
 
     /* pose를 받은 뒤 10회(≈1 s) 동안 연속 송출해야 PX4가 Offboard를 허용 */
     if (!armed_ || landed_ || !landmode_) {
